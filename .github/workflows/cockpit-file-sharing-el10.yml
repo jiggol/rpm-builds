@@ -136,7 +136,7 @@ jobs:
           mapfile -d '' rpm_files < <(find out -type f -name '*.rpm' -print0)
           (( ${#rpm_files[@]} >= 2 )) || { echo 'RPM artifacts missing' >&2; exit 1; }
 
-          gh release create "$UPSTREAM_TAG" "${rpm_files[@]}" \
+          gh release create "cockpit-file-sharing-$UPSTREAM_TAG" "${rpm_files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --title "cockpit-file-sharing $UPSTREAM_TAG for AlmaLinux 10" \
             --notes "Unofficial rebuild of the 45Drives EL9 source RPM on AlmaLinux 10. Not a 45Drives-supported package. Test before installing on production servers."
