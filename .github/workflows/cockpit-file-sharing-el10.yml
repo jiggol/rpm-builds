@@ -1,0 +1,142 @@
+name: Build cockpit-file-sharing RPM for AlmaLinux 10
+
+on:
+  schedule:
+    # 12:17 KST, daily. Scheduled workflows run on the default branch.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cockpit-file-sharing-el10
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.release.outputs.build }}
+      tag: ${{ steps.release.outputs.tag }}
+      srpm_url: ${{ steps.release.outputs.srpm_url }}
+    steps:
+      - id: release
+        name: Find an unbuilt upstream stable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh api repos/45Drives/cockpit-file-sharing/releases/latest)"
+          tag="$(jq -er '.tag_name' <<< "$release_json")"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Unexpected upstream tag: $tag" >&2
+            exit 1
+          }
+
+          srpm_url="$(jq -er '[.assets[] | select(.name | endswith(".el9.src.rpm")) | .browser_download_url] | first' <<< "$release_json")"
+          [[ "$srpm_url" == "https://github.com/45Drives/cockpit-file-sharing/releases/download/$tag/"* ]] || {
+            echo "Unexpected SRPM download URL: $srpm_url" >&2
+            exit 1
+          }
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "srpm_url=$srpm_url" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Already published $tag; nothing to do."
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "New version $tag found."
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: almalinux:10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install RPM and frontend build tools
+        run: |
+          set -euo pipefail
+          dnf -y install dnf-plugins-core epel-release
+          dnf config-manager --set-enabled crb
+          dnf -y install \
+            rpm-build redhat-rpm-config git make curl ca-certificates \
+            nodejs npm jq moreutils python3 gcc gcc-c++ tar gzip
+          npm install --global --force corepack
+          corepack enable
+          corepack prepare yarn@4.6.0 --activate
+
+      - name: Prepare upstream SRPM and adjust EL10 build flag
+        env:
+          SRPM_URL: ${{ needs.check.outputs.srpm_url }}
+          UPSTREAM_TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          topdir="$GITHUB_WORKSPACE/rpmbuild"
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          curl --fail --location --retry 3 --output /tmp/upstream.src.rpm "$SRPM_URL"
+
+          source_version="$(rpm -qp --queryformat '%{VERSION}' /tmp/upstream.src.rpm)"
+          test "v$source_version" = "$UPSTREAM_TAG"
+          rpm -ivh --define "_topdir $topdir" /tmp/upstream.src.rpm
+
+          spec="$topdir/SPECS/cockpit-file-sharing.spec"
+          test -f "$spec"
+          sed -i 's/OS_PACKAGE_RELEASE=el9/OS_PACKAGE_RELEASE=el10/g' "$spec"
+          echo "Updated build settings in $spec"
+
+      - name: Build RPM and SRPM
+        run: |
+          set -euo pipefail
+          test "$(rpm --eval '%{?dist}')" = '.el10' || {
+            echo 'Expected an .el10 RPM release tag' >&2
+            exit 1
+          }
+          rpmbuild -ba \
+            --define "_topdir $GITHUB_WORKSPACE/rpmbuild" \
+            "$GITHUB_WORKSPACE/rpmbuild/SPECS/cockpit-file-sharing.spec"
+
+          rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' \
+            "$GITHUB_WORKSPACE"/rpmbuild/RPMS/noarch/*.rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cockpit-file-sharing-${{ needs.check.outputs.tag }}-el10
+          path: |
+            rpmbuild/RPMS/noarch/*.rpm
+            rpmbuild/SRPMS/*.src.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cockpit-file-sharing-${{ needs.check.outputs.tag }}-el10
+          path: out
+
+      - name: Publish RPMs to this repository's GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' rpm_files < <(find out -type f -name '*.rpm' -print0)
+          (( ${#rpm_files[@]} >= 2 )) || { echo 'RPM artifacts missing' >&2; exit 1; }
+
+          gh release create "$UPSTREAM_TAG" "${rpm_files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "cockpit-file-sharing $UPSTREAM_TAG for AlmaLinux 10" \
+            --notes "Unofficial rebuild of the 45Drives EL9 source RPM on AlmaLinux 10. Not a 45Drives-supported package. Test before installing on production servers."
