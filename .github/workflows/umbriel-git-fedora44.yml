@@ -1,4 +1,4 @@
-name: Build Umbriel Git RPM for Fedora 44
+name: Build Umbriel and Portal Nightly RPMs for Fedora 44
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: umbriel-git-fedora44
+  group: umbriel-nightly-fedora44
   cancel-in-progress: false
 
 jobs:
@@ -21,6 +21,8 @@ jobs:
       tag: ${{ steps.upstream.outputs.tag }}
       short_sha: ${{ steps.upstream.outputs.short_sha }}
       snapshot: ${{ steps.upstream.outputs.snapshot }}
+      portal_sha: ${{ steps.upstream.outputs.portal_sha }}
+      portal_snapshot: ${{ steps.upstream.outputs.portal_snapshot }}
     steps:
       - id: upstream
         name: Check latest Umbriel main commit
@@ -32,11 +34,18 @@ jobs:
           sha="$(gh api repos/noctalia-dev/umbriel/commits/main --jq .sha)"
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           short_sha="${sha:0:12}"
-          tag="umbriel-git-${short_sha}"
+          portal_sha="$(gh api repos/noctalia-dev/xdg-desktop-portal-umbriel/commits/main --jq .sha)"
+          [[ "$portal_sha" =~ ^[0-9a-f]{40}$ ]]
+          portal_short="${portal_sha:0:12}"
+          tag="umbriel-nightly-${short_sha}-portal-${portal_short}"
           date="$(gh api "repos/noctalia-dev/umbriel/commits/$sha" --jq '.commit.committer.date' | cut -c1-10 | tr -d '-')"
           [[ "$date" =~ ^[0-9]{8}$ ]]
+          portal_date="$(gh api "repos/noctalia-dev/xdg-desktop-portal-umbriel/commits/$portal_sha" --jq '.commit.committer.date' | cut -c1-10 | tr -d '-')"
+          [[ "$portal_date" =~ ^[0-9]{8}$ ]]
           {
             echo "sha=$sha"
+            echo "portal_sha=$portal_sha"
+            echo "portal_snapshot=git${portal_date}.${portal_short}"
             echo "tag=$tag"
             echo "short_sha=$short_sha"
             echo "snapshot=git${date}.${short_sha}"
@@ -64,11 +73,12 @@ jobs:
         run: |
           set -euo pipefail
           dnf -y install rpm-build rpmdevtools redhat-rpm-config git tar gzip findutils
-          dnf -y builddep specs/umbriel-git.spec
+          dnf -y builddep specs/umbriel-nightly.spec specs/xdg-desktop-portal-umbriel-nightly.spec
       - name: Archive exact upstream commit
         env:
           SOURCE_SHA: ${{ needs.check.outputs.sha }}
           SNAPSHOT: ${{ needs.check.outputs.snapshot }}
+          PORTAL_SHA: ${{ needs.check.outputs.portal_sha }}
         run: |
           set -euo pipefail
           topdir="$GITHUB_WORKSPACE/rpmbuild"
@@ -79,22 +89,33 @@ jobs:
           test "$(cat upstream/VERSION)" = '0.1.0'
           git -C upstream archive --format=tar --prefix=umbriel-0.1.0/ "$SOURCE_SHA" \
             | gzip -n > "$topdir/SOURCES/umbriel-0.1.0.tar.gz"
-          cp specs/umbriel-git.spec "$topdir/SPECS/"
+          cp specs/umbriel-nightly.spec "$topdir/SPECS/"
+          git clone --filter=blob:none https://github.com/noctalia-dev/xdg-desktop-portal-umbriel.git portal-upstream
+          git -C portal-upstream checkout --detach "$PORTAL_SHA"
+          test "$(git -C portal-upstream rev-parse HEAD)" = "$PORTAL_SHA"
+          git -C portal-upstream archive --format=tar --prefix=xdg-desktop-portal-umbriel-0.1.0/ "$PORTAL_SHA" \
+            | gzip -n > "$topdir/SOURCES/xdg-desktop-portal-umbriel-0.1.0.tar.gz"
+          cp specs/xdg-desktop-portal-umbriel-nightly.spec "$topdir/SPECS/"
           echo "Building commit $SOURCE_SHA ($SNAPSHOT)"
       - name: Build binary RPM and source RPM
         env:
           SNAPSHOT: ${{ needs.check.outputs.snapshot }}
+          PORTAL_SNAPSHOT: ${{ needs.check.outputs.portal_snapshot }}
         run: |
           set -euo pipefail
           rpmbuild -ba \
             --define "_topdir $GITHUB_WORKSPACE/rpmbuild" \
             --define "snapshot $SNAPSHOT" \
-            "$GITHUB_WORKSPACE/rpmbuild/SPECS/umbriel-git.spec"
+            "$GITHUB_WORKSPACE/rpmbuild/SPECS/umbriel-nightly.spec"
+          rpmbuild -ba \
+            --define "_topdir $GITHUB_WORKSPACE/rpmbuild" \
+            --define "snapshot $PORTAL_SNAPSHOT" \
+            "$GITHUB_WORKSPACE/rpmbuild/SPECS/xdg-desktop-portal-umbriel-nightly.spec"
           rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' \
             "$GITHUB_WORKSPACE"/rpmbuild/RPMS/x86_64/*.rpm
       - uses: actions/upload-artifact@v4
         with:
-          name: umbriel-git-${{ needs.check.outputs.short_sha }}-fedora44
+          name: umbriel-nightly-${{ needs.check.outputs.short_sha }}-fedora44
           path: |
             rpmbuild/RPMS/**/*.rpm
             rpmbuild/SRPMS/*.src.rpm
@@ -109,22 +130,23 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: umbriel-git-${{ needs.check.outputs.short_sha }}-fedora44
+          name: umbriel-nightly-${{ needs.check.outputs.short_sha }}-fedora44
           path: out
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+          PORTAL_SHA: ${{ needs.check.outputs.portal_sha }}
           PACKAGE_TAG: ${{ needs.check.outputs.tag }}
         run: |
           set -euo pipefail
           mapfile -d '' packages < <(find out -type f -name '*.rpm' -print0)
-          (( ${#packages[@]} >= 2 )) || { echo 'Expected RPM and SRPM' >&2; exit 1; }
+          (( ${#packages[@]} >= 4 )) || { echo 'Expected RPM and SRPM' >&2; exit 1; }
           if gh release view "$PACKAGE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Already released $PACKAGE_TAG"
             exit 0
           fi
           gh release create "$PACKAGE_TAG" "${packages[@]}" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Umbriel Git ${UPSTREAM_SHA:0:12} for Fedora 44" \
-            --notes "Unofficial Fedora 44 snapshot of noctalia-dev/umbriel at commit $UPSTREAM_SHA. This is a development build, not an upstream stable release."
+            --title "Umbriel + Portal Nightly for Fedora 44" \
+            --notes "Unofficial Fedora 44 builds. Umbriel commit: $UPSTREAM_SHA. Portal commit: $PORTAL_SHA. Both RPMs are built together from pinned upstream Git commits."
