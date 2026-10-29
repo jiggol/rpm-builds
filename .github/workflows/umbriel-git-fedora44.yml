@@ -1,0 +1,130 @@
+name: Build Umbriel Git RPM for Fedora 44
+
+on:
+  schedule:
+    - cron: '31 3 * * *' # 12:31 KST, daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: umbriel-git-fedora44
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.upstream.outputs.build }}
+      sha: ${{ steps.upstream.outputs.sha }}
+      tag: ${{ steps.upstream.outputs.tag }}
+      short_sha: ${{ steps.upstream.outputs.short_sha }}
+      snapshot: ${{ steps.upstream.outputs.snapshot }}
+    steps:
+      - id: upstream
+        name: Check latest Umbriel main commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api repos/noctalia-dev/umbriel/commits/main --jq .sha)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          short_sha="${sha:0:12}"
+          tag="umbriel-git-${short_sha}"
+          date="$(gh api "repos/noctalia-dev/umbriel/commits/$sha" --jq '.commit.committer.date' | cut -c1-10 | tr -d '-')"
+          [[ "$date" =~ ^[0-9]{8}$ ]]
+          {
+            echo "sha=$sha"
+            echo "tag=$tag"
+            echo "short_sha=$short_sha"
+            echo "snapshot=git${date}.${short_sha}"
+          } >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+            echo "Already published $tag"
+          else
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+            echo "Will build $tag"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RPM build requirements
+        run: |
+          set -euo pipefail
+          dnf -y install rpm-build rpmdevtools redhat-rpm-config git tar gzip findutils
+          dnf -y builddep specs/umbriel-git.spec
+      - name: Archive exact upstream commit
+        env:
+          SOURCE_SHA: ${{ needs.check.outputs.sha }}
+          SNAPSHOT: ${{ needs.check.outputs.snapshot }}
+        run: |
+          set -euo pipefail
+          topdir="$GITHUB_WORKSPACE/rpmbuild"
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          git clone --filter=blob:none https://github.com/noctalia-dev/umbriel.git upstream
+          git -C upstream checkout --detach "$SOURCE_SHA"
+          test "$(git -C upstream rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(cat upstream/VERSION)" = '0.1.0'
+          git -C upstream archive --format=tar --prefix=umbriel-0.1.0/ "$SOURCE_SHA" \
+            | gzip -n > "$topdir/SOURCES/umbriel-0.1.0.tar.gz"
+          cp specs/umbriel-git.spec "$topdir/SPECS/"
+          echo "Building commit $SOURCE_SHA ($SNAPSHOT)"
+      - name: Build binary RPM and source RPM
+        env:
+          SNAPSHOT: ${{ needs.check.outputs.snapshot }}
+        run: |
+          set -euo pipefail
+          rpmbuild -ba \
+            --define "_topdir $GITHUB_WORKSPACE/rpmbuild" \
+            --define "snapshot $SNAPSHOT" \
+            "$GITHUB_WORKSPACE/rpmbuild/SPECS/umbriel-git.spec"
+          rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' \
+            "$GITHUB_WORKSPACE"/rpmbuild/RPMS/x86_64/*.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: umbriel-git-${{ needs.check.outputs.short_sha }}-fedora44
+          path: |
+            rpmbuild/RPMS/**/*.rpm
+            rpmbuild/SRPMS/*.src.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: umbriel-git-${{ needs.check.outputs.short_sha }}-fedora44
+          path: out
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ needs.check.outputs.sha }}
+          PACKAGE_TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' packages < <(find out -type f -name '*.rpm' -print0)
+          (( ${#packages[@]} >= 2 )) || { echo 'Expected RPM and SRPM' >&2; exit 1; }
+          if gh release view "$PACKAGE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Already released $PACKAGE_TAG"
+            exit 0
+          fi
+          gh release create "$PACKAGE_TAG" "${packages[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Umbriel Git ${UPSTREAM_SHA:0:12} for Fedora 44" \
+            --notes "Unofficial Fedora 44 snapshot of noctalia-dev/umbriel at commit $UPSTREAM_SHA. This is a development build, not an upstream stable release."
