@@ -216,29 +216,29 @@ jobs:
                     : type === 'feat' ? 'Features'
                     : type === 'fix' ? 'Bug fixes'
                     : type === 'perf' ? 'Performance' : 'Other changes';
-                const cleanTitle = title.replace(/[\[\]`]/g, c => '\\' + c);
-                groups.get(section).push('- ' + cleanTitle + ' ([\`' + commit.sha.slice(0, 7) + '\`](' + commit.html_url + '))');
+                  const cleanTitle = title.replace(/[\[\]`]/g, c => '\\' + c);
+                  groups.get(section).push('- ' + cleanTitle + ' ([\`' + commit.sha.slice(0, 7) + '\`](' + commit.html_url + '))');
+                }
+                let shown = 0;
+                for (const [section, entries] of groups) {
+                  if (!entries.length) continue;
+                  shown += entries.length;
+                  notes.push('### ' + section, ...entries, '');
+                }
+                if (!shown) notes.push('No non-merge commits in this comparison.', '');
+                if (total > commits.length) {
+                  notes.push('**Note:** Only ' + commits.length + ' of ' + total + ' commits were returned by the GitHub comparison API. See the full comparison above.', '');
+                }
+              } catch (error) {
+                core.warning('Unable to generate ' + label + ' changelog: ' + error.message);
+                notes.push('Could not retrieve the commit list; use the full comparison link above.', '');
               }
-              let shown = 0;
-              for (const [section, entries] of groups) {
-                if (!entries.length) continue;
-                shown += entries.length;
-                notes.push('### ' + section, ...entries, '');
-              }
-              if (!shown) notes.push('No non-merge commits in this comparison.', '');
-              if (total > commits.length) {
-                notes.push('**Note:** Only ' + commits.length + ' of ' + total + ' commits were returned by the GitHub comparison API. See the full comparison above.', '');
-              }
-            } catch (error) {
-              core.warning('Unable to generate ' + label + ' changelog: ' + error.message);
-              notes.push('Could not retrieve the commit list; use the full comparison link above.', '');
             }
-          }
           
-          await addChanges('Umbriel', 'umbriel', match ? match[1] : null, umSha);
-          await addChanges('XDG Desktop Portal', 'xdg-desktop-portal-umbriel', match ? match[2] : null, portalSha);
-          fs.writeFileSync('release-notes.md', notes.join('\n') + '\n', 'utf8');
-          core.info('Generated release-notes.md from the previous published Nightly release.');
+            await addChanges('Umbriel', 'umbriel', match ? match[1] : null, umSha);
+            await addChanges('XDG Desktop Portal', 'xdg-desktop-portal-umbriel', match ? match[2] : null, portalSha);
+            fs.writeFileSync('release-notes.md', notes.join('\n') + '\n', 'utf8');
+            core.info('Generated release-notes.md from the previous published Nightly release.');
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
