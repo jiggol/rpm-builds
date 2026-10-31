@@ -140,83 +140,83 @@ jobs:
           PORTAL_SHA: ${{ needs.check.outputs.portal_sha }}
         with:
           script: |
-          const fs = require('node:fs');
-          const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
-          const currentTag = process.env.PACKAGE_TAG;
-          const umSha = process.env.UPSTREAM_SHA;
-          const portalSha = process.env.PORTAL_SHA;
-          const tagPattern = /^umbriel-nightly-([0-9a-f]{12})-portal-([0-9a-f]{12})$/;
+            const fs = require('node:fs');
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+            const currentTag = process.env.PACKAGE_TAG;
+            const umSha = process.env.UPSTREAM_SHA;
+            const portalSha = process.env.PORTAL_SHA;
+            const tagPattern = /^umbriel-nightly-([0-9a-f]{12})-portal-([0-9a-f]{12})$/;
           
-          const notes = [
-            'Unofficial Fedora 44 RPM builds from pinned upstream Git commits.',
-            '',
-            '- Umbriel: [\`' + umSha.slice(0, 12) + '\`](https://github.com/noctalia-dev/umbriel/commit/' + umSha + ')',
-            '- XDG Desktop Portal: [\`' + portalSha.slice(0, 12) + '\`](https://github.com/noctalia-dev/xdg-desktop-portal-umbriel/commit/' + portalSha + ')',
-            '',
-          ];
+            const notes = [
+              'Unofficial Fedora 44 RPM builds from pinned upstream Git commits.',
+              '',
+              '- Umbriel: [\`' + umSha.slice(0, 12) + '\`](https://github.com/noctalia-dev/umbriel/commit/' + umSha + ')',
+              '- XDG Desktop Portal: [\`' + portalSha.slice(0, 12) + '\`](https://github.com/noctalia-dev/xdg-desktop-portal-umbriel/commit/' + portalSha + ')',
+              '',
+            ];
           
-          let previous = null;
-          try {
-            const { data: releases } = await github.rest.repos.listReleases({ owner, repo, per_page: 100 });
-            previous = releases.find(r => !r.draft && r.tag_name !== currentTag && tagPattern.test(r.tag_name)) || null;
-          } catch (error) {
-            core.warning('Unable to read previous releases: ' + error.message);
-          }
-          const match = previous && previous.tag_name.match(tagPattern);
-          if (previous) {
-            notes.push('Compared with [previous Nightly release](' + previous.html_url + ').', '');
-          } else {
-            notes.push('No previous Umbriel Nightly release was found; commit history comparison is unavailable.', '');
-          }
-          
-          async function addChanges(label, upstreamRepo, base, head) {
-            notes.push('## ' + label);
-            if (!base) {
-              notes.push('Initial tracked release; no previous upstream commit is available.', '');
-              return;
-            }
-            if (head.startsWith(base)) {
-              notes.push('No new upstream commits.', '');
-              return;
-            }
-            const compareUrl = 'https://github.com/noctalia-dev/' + upstreamRepo + '/compare/' + base + '...' + head;
-            notes.push('[Full upstream comparison](' + compareUrl + ')', '');
+            let previous = null;
             try {
-              const commits = [];
-              let total = 0;
-              let status = '';
-              for (let page = 1; page <= 3; page++) {
-                const { data } = await github.rest.repos.compareCommitsWithBasehead({
-                  owner: 'noctalia-dev', repo: upstreamRepo,
-                  basehead: base + '...' + head, per_page: 100, page,
-                });
-                total = data.total_commits;
-                status = data.status;
-                commits.push(...data.commits);
-                if (commits.length >= total || data.commits.length < 100) break;
+              const { data: releases } = await github.rest.repos.listReleases({ owner, repo, per_page: 100 });
+              previous = releases.find(r => !r.draft && r.tag_name !== currentTag && tagPattern.test(r.tag_name)) || null;
+            } catch (error) {
+              core.warning('Unable to read previous releases: ' + error.message);
+            }
+            const match = previous && previous.tag_name.match(tagPattern);
+            if (previous) {
+              notes.push('Compared with [previous Nightly release](' + previous.html_url + ').', '');
+            } else {
+              notes.push('No previous Umbriel Nightly release was found; commit history comparison is unavailable.', '');
+            }
+          
+            async function addChanges(label, upstreamRepo, base, head) {
+              notes.push('## ' + label);
+              if (!base) {
+                notes.push('Initial tracked release; no previous upstream commit is available.', '');
+                return;
               }
-              if (status !== 'ahead' && status !== 'identical') {
-                notes.push('**History warning:** upstream comparison status is \`' + status + '\`.', '');
+              if (head.startsWith(base)) {
+                notes.push('No new upstream commits.', '');
+                return;
               }
-              const groups = new Map([
-                ['Breaking changes', []],
-                ['Features', []],
-                ['Bug fixes', []],
-                ['Performance', []],
-                ['Other changes', []],
-              ]);
-              for (const commit of commits) {
-                const message = commit.commit.message;
-                const title = message.split(/\r?\n/, 1)[0];
-                if (/^Merge (pull request|branch)\b/i.test(title)) continue;
-                const conventional = title.match(/^([a-z]+)(?:\([^)]+\))?(!)?:\s*/i);
-                const type = conventional ? conventional[1].toLowerCase() : '';
-                const breaking = Boolean(conventional && conventional[2]) || /BREAKING[ -]CHANGE:/i.test(message);
-                const section = breaking ? 'Breaking changes'
-                  : type === 'feat' ? 'Features'
-                  : type === 'fix' ? 'Bug fixes'
-                  : type === 'perf' ? 'Performance' : 'Other changes';
-                const cleanTitle = title.replace(/[\[\]\`]/g, '\\      - name: Publish GitHub release
+              const compareUrl = 'https://github.com/noctalia-dev/' + upstreamRepo + '/compare/' + base + '...' + head;
+              notes.push('[Full upstream comparison](' + compareUrl + ')', '');
+              try {
+                const commits = [];
+                let total = 0;
+                let status = '';
+                for (let page = 1; page <= 3; page++) {
+                  const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                    owner: 'noctalia-dev', repo: upstreamRepo,
+                    basehead: base + '...' + head, per_page: 100, page,
+                  });
+                  total = data.total_commits;
+                  status = data.status;
+                  commits.push(...data.commits);
+                  if (commits.length >= total || data.commits.length < 100) break;
+                }
+                if (status !== 'ahead' && status !== 'identical') {
+                  notes.push('**History warning:** upstream comparison status is \`' + status + '\`.', '');
+                }
+                const groups = new Map([
+                  ['Breaking changes', []],
+                  ['Features', []],
+                  ['Bug fixes', []],
+                  ['Performance', []],
+                  ['Other changes', []],
+                ]);
+                for (const commit of commits) {
+                  const message = commit.commit.message;
+                  const title = message.split(/\r?\n/, 1)[0];
+                  if (/^Merge (pull request|branch)\b/i.test(title)) continue;
+                  const conventional = title.match(/^([a-z]+)(?:\([^)]+\))?(!)?:\s*/i);
+                  const type = conventional ? conventional[1].toLowerCase() : '';
+                  const breaking = Boolean(conventional && conventional[2]) || /BREAKING[ -]CHANGE:/i.test(message);
+                  const section = breaking ? 'Breaking changes'
+                    : type === 'feat' ? 'Features'
+                    : type === 'fix' ? 'Bug fixes'
+                    : type === 'perf' ? 'Performance' : 'Other changes';
+                  const cleanTitle = title.replace(/[\[\]\`]/g, '\\      - name: Publish GitHub release
 ');
                 groups.get(section).push('- ' + cleanTitle + ' ([\`' + commit.sha.slice(0, 7) + '\`](' + commit.html_url + '))');
               }
