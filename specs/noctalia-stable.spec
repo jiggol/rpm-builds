@@ -1,5 +1,7 @@
+%{!?upstream_version:%global upstream_version 5.4.1}
+
 Name:           noctalia
-Version:        5.4.1
+Version:        %{upstream_version}
 Release:        99%{?dist}
 Summary:        A sleek, customizable desktop shell crafted for Wayland
 License:        Apache-2.0 AND MIT AND BSD-3-Clause AND HPND-sell-variant AND LGPL-2.1-or-later
