@@ -216,8 +216,7 @@ jobs:
                     : type === 'feat' ? 'Features'
                     : type === 'fix' ? 'Bug fixes'
                     : type === 'perf' ? 'Performance' : 'Other changes';
-                  const cleanTitle = title.replace(/[\[\]\`]/g, '\\      - name: Publish GitHub release
-');
+                const cleanTitle = title.replace(/[\[\]`]/g, c => '\\' + c);
                 groups.get(section).push('- ' + cleanTitle + ' ([\`' + commit.sha.slice(0, 7) + '\`](' + commit.html_url + '))');
               }
               let shown = 0;
