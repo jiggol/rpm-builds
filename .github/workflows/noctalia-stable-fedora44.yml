@@ -1,0 +1,153 @@
+name: Build Noctalia Stable RPM for Fedora 44
+
+on:
+  schedule:
+    - cron: '57 4 * * *' # 13:57 KST daily
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/noctalia-stable-fedora44.yml
+      - specs/noctalia-stable.spec
+
+permissions:
+  contents: read
+
+concurrency:
+  group: noctalia-stable-fedora44
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.release.outputs.build }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      source_tag: ${{ steps.release.outputs.source_tag }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+    steps:
+      - id: release
+        name: Check latest official Noctalia release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source_tag="$(gh api repos/noctalia-dev/noctalia/releases/latest --jq .tag_name)"
+          [[ "$source_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Unexpected Noctalia tag: $source_tag" >&2
+            exit 1
+          }
+          version="${source_tag#v}"
+          source_sha="$(gh api "repos/noctalia-dev/noctalia/commits/$source_tag" --jq .sha)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          tag="noctalia-v${version}-fedora44"
+          {
+            echo "source_tag=$source_tag"
+            echo "source_sha=$source_sha"
+            echo "version=$version"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Already published $tag"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Will build $tag from $source_sha"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RPM build requirements
+        run: |
+          set -euo pipefail
+          dnf -y install rpm-build rpmdevtools redhat-rpm-config git tar gzip findutils
+          dnf -y builddep specs/noctalia-stable.spec
+
+      - name: Archive pinned official release commit
+        env:
+          SOURCE_TAG: ${{ needs.check.outputs.source_tag }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          topdir="$GITHUB_WORKSPACE/rpmbuild"
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          git clone --filter=blob:none https://github.com/noctalia-dev/noctalia.git upstream
+          git -C upstream checkout --detach "$SOURCE_SHA"
+          test "$(git -C upstream rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C upstream rev-parse "$SOURCE_TAG^{commit}")" = "$SOURCE_SHA"
+          test "$(cat upstream/VERSION)" = "$VERSION"
+          git -C upstream archive --format=tar --prefix="noctalia-${VERSION}/" "$SOURCE_SHA" \
+            | gzip -n > "$topdir/SOURCES/noctalia-${VERSION}.tar.gz"
+          cp specs/noctalia-stable.spec "$topdir/SPECS/"
+
+      - name: Build binary RPM and source RPM
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          rpmbuild -ba \
+            --define "_topdir $GITHUB_WORKSPACE/rpmbuild" \
+            --define "upstream_version $VERSION" \
+            --define "_smp_mflags -j2" \
+            "$GITHUB_WORKSPACE/rpmbuild/SPECS/noctalia-stable.spec"
+          rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' \
+            "$GITHUB_WORKSPACE"/rpmbuild/RPMS/x86_64/*.rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noctalia-v${{ needs.check.outputs.version }}-fedora44
+          path: |
+            rpmbuild/RPMS/**/*.rpm
+            rpmbuild/SRPMS/*.src.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: noctalia-v${{ needs.check.outputs.version }}-fedora44
+          path: out
+      - name: Publish GitHub release with upstream changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ needs.check.outputs.source_tag }}
+          SOURCE_SHA: ${{ needs.check.outputs.source_sha }}
+          PACKAGE_TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' packages < <(find out -type f -name '*.rpm' -print0)
+          (( ${#packages[@]} >= 2 )) || { echo 'Expected RPM and SRPM' >&2; exit 1; }
+          if gh release view "$PACKAGE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Already released $PACKAGE_TAG"
+            exit 0
+          fi
+          {
+            printf 'Unofficial **Fedora 44** RPM rebuild of [Noctalia %s](https://github.com/noctalia-dev/noctalia/releases/tag/%s).\n\n' "$SOURCE_TAG" "$SOURCE_TAG"
+            printf 'Pinned upstream commit: %s\n\n' "$SOURCE_SHA"
+            printf 'Replaces the older distro Noctalia RPM. Release 99 prevents an older build of the same upstream version from replacing it.\n\n'
+            printf '%s\n\n' '---'
+            gh release view "$SOURCE_TAG" --repo noctalia-dev/noctalia --json body --jq .body
+          } > release-notes.md
+          gh release create "$PACKAGE_TAG" "${packages[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Noctalia $SOURCE_TAG for Fedora 44" \
+            --latest=false \
+            --notes-file release-notes.md
