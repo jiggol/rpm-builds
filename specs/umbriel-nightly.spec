@@ -57,7 +57,7 @@ Umbriel portal backend is a separate RPM.
 %autosetup -n umbriel-%{version}
 
 %build
-%meson -Dtests=disabled -Dtest_ipc=disabled
+%meson -Dtests=disabled -Dharness=disabled
 %meson_build
 
 %install
