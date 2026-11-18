@@ -25,6 +25,12 @@ BuildRequires:  pkgconfig(cairo)
 BuildRequires:  pkgconfig(tomlplusplus)
 BuildRequires:  pkgconfig(nlohmann_json)
 BuildRequires:  pkgconfig(gtk4) >= 4.12
+BuildRequires:  pkgconfig(freetype2)
+BuildRequires:  pkgconfig(fontconfig)
+BuildRequires:  pkgconfig(pangoft2)
+BuildRequires:  pkgconfig(harfbuzz)
+BuildRequires:  pkgconfig(wayland-egl)
+BuildRequires:  stb_image_resize2-devel
 BuildRequires:  glib2-devel
 BuildRequires:  systemd-rpm-macros
 
@@ -40,7 +46,7 @@ ScreenCast, Screenshot, and InputCapture portals.
 %autosetup -n xdg-desktop-portal-umbriel-%{version}
 
 %build
-%meson -Dtests=false -Dpicker=enabled
+%meson -Dtests=false -Dpicker=true
 %meson_build
 
 %install
@@ -53,5 +59,6 @@ ScreenCast, Screenshot, and InputCapture portals.
 %{_libexecdir}/umbriel-share-picker
 %{_datadir}/xdg-desktop-portal/portals/umbriel.portal
 %{_datadir}/xdg-desktop-portal/umbriel-portals.conf
+%{_datadir}/xdg-desktop-portal-umbriel/assets/
 %{_datadir}/dbus-1/services/org.freedesktop.impl.portal.desktop.umbriel.service
 %{_userunitdir}/xdg-desktop-portal-umbriel.service
