@@ -68,7 +68,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install RPM build requirements
         run: |
           set -euo pipefail
@@ -106,7 +106,7 @@ jobs:
           rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' \
             "$GITHUB_WORKSPACE"/rpmbuild/RPMS/x86_64/*.rpm
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: noctalia-v${{ needs.check.outputs.version }}-fedora44
           path: |
@@ -121,7 +121,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: noctalia-v${{ needs.check.outputs.version }}-fedora44
           path: out
