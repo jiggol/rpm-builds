@@ -59,7 +59,7 @@ Requires:       git
 Recommends:     sound-theme-freedesktop
 
 %description
-Unofficial Fedora 44 rebuild of the latest official Noctalia release.
+Unofficial Fedora 45 rebuild of the latest official Noctalia release.
 This package replaces the distro's older noctalia RPM and includes all
 runtime assets required by the Wayland desktop shell.
 

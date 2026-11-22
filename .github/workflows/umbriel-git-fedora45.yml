@@ -1,6 +1,13 @@
-name: Build Umbriel and Portal Nightly RPMs for Fedora 44
+name: Build Umbriel and Portal Nightly RPMs for Fedora 45
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/umbriel-git-fedora45.yml
+      - specs/umbriel-nightly.spec
+      - specs/xdg-desktop-portal-umbriel-nightly.spec
   schedule:
     - cron: '31 3 * * *' # 12:31 KST, daily
   workflow_dispatch:
@@ -9,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: umbriel-nightly-fedora44
+  group: umbriel-nightly-fedora45
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +44,7 @@ jobs:
           portal_sha="$(gh api repos/noctalia-dev/xdg-desktop-portal-umbriel/commits/main --jq .sha)"
           [[ "$portal_sha" =~ ^[0-9a-f]{40}$ ]]
           portal_short="${portal_sha:0:12}"
-          tag="umbriel-nightly-${short_sha}-portal-${portal_short}"
+          tag="umbriel-nightly-${short_sha}-portal-${portal_short}-fedora45"
           date="$(gh api "repos/noctalia-dev/umbriel/commits/$sha" --jq '.commit.committer.date' | cut -c1-10 | tr -d '-')"
           [[ "$date" =~ ^[0-9]{8}$ ]]
           portal_date="$(gh api "repos/noctalia-dev/xdg-desktop-portal-umbriel/commits/$portal_sha" --jq '.commit.committer.date' | cut -c1-10 | tr -d '-')"
@@ -63,7 +70,7 @@ jobs:
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     container:
-      image: fedora:44
+      image: fedora:45
     defaults:
       run:
         shell: bash
@@ -103,6 +110,7 @@ jobs:
           PORTAL_SNAPSHOT: ${{ needs.check.outputs.portal_snapshot }}
         run: |
           set -euo pipefail
+          test "$(rpm --eval '%{?dist}')" = '.fc45' || { echo 'Expected .fc45 RPM release tag' >&2; exit 1; }
           rpmbuild -ba \
             --define "_topdir $GITHUB_WORKSPACE/rpmbuild" \
             --define "snapshot $SNAPSHOT" \
@@ -115,7 +123,7 @@ jobs:
             "$GITHUB_WORKSPACE"/rpmbuild/RPMS/x86_64/*.rpm
       - uses: actions/upload-artifact@v4
         with:
-          name: umbriel-nightly-${{ needs.check.outputs.short_sha }}-fedora44
+          name: umbriel-nightly-${{ needs.check.outputs.short_sha }}-fedora45
           path: |
             rpmbuild/RPMS/**/*.rpm
             rpmbuild/SRPMS/*.src.rpm
@@ -130,7 +138,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: umbriel-nightly-${{ needs.check.outputs.short_sha }}-fedora44
+          name: umbriel-nightly-${{ needs.check.outputs.short_sha }}-fedora45
           path: out
       - name: Generate changelog from upstream commits
         uses: actions/github-script@v8
@@ -145,10 +153,10 @@ jobs:
             const currentTag = process.env.PACKAGE_TAG;
             const umSha = process.env.UPSTREAM_SHA;
             const portalSha = process.env.PORTAL_SHA;
-            const tagPattern = /^umbriel-nightly-([0-9a-f]{12})-portal-([0-9a-f]{12})$/;
+            const tagPattern = /^umbriel-nightly-([0-9a-f]{12})-portal-([0-9a-f]{12})(?:-fedora(?:44|45))?$/;
           
             const notes = [
-              'Unofficial Fedora 44 RPM builds from pinned upstream Git commits.',
+              'Unofficial Fedora 45 RPM builds from pinned upstream Git commits.',
               '',
               '- Umbriel: [\`' + umSha.slice(0, 12) + '\`](https://github.com/noctalia-dev/umbriel/commit/' + umSha + ')',
               '- XDG Desktop Portal: [\`' + portalSha.slice(0, 12) + '\`](https://github.com/noctalia-dev/xdg-desktop-portal-umbriel/commit/' + portalSha + ')',
@@ -255,5 +263,5 @@ jobs:
           fi
           gh release create "$PACKAGE_TAG" "${packages[@]}" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Umbriel + Portal Nightly for Fedora 44" \
+            --title "Umbriel + Portal Nightly for Fedora 45" \
             --notes-file release-notes.md

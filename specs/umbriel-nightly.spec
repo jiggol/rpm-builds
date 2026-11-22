@@ -50,7 +50,7 @@ Obsoletes:      umbriel-git < 0.2
 
 %description
 Unofficial development snapshot of the Umbriel Wayland compositor,
-built from a pinned upstream Git commit for Fedora 44. The matching
+built from a pinned upstream Git commit for Fedora 45. The matching
 Umbriel portal backend is a separate RPM.
 
 %prep
