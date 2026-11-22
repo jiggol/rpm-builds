@@ -77,6 +77,7 @@ runtime assets required by the Wayland desktop shell.
 %license LICENSE
 %doc README.md
 %{_bindir}/noctalia
+%{_libexecdir}/noctalia/noctalia-pam-helper
 %{_datadir}/noctalia/
 %{_datadir}/applications/dev.noctalia.Noctalia.desktop
 %{_datadir}/applications/dev.noctalia.Noctalia.Annotator.desktop
